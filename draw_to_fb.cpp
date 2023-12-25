@@ -1,6 +1,6 @@
 #include <string>
 #include <iostream>
-#include <cmath>
+#include <cmath> // std::sqrt
 
 #include <linux/fb.h> // ioctl constants and structures we use come from here
 #include <unistd.h> // close
@@ -10,23 +10,68 @@
 
 #include <vector>
 
-struct GeometricGameObject {
-  int(*fn)(int, int, int);
+// ========== Constants ==========
+
+// ========== Documentation ==========
+// {{{
+/* Put a `GeometricGameObject` into the global `game_objects`, which is of type `std::vector`,
+ * to have it rendered to the framebuffer.
+ *
+ * A `GeoemtricGameObject` is an object living in the 3d world you are exploring.
+ * It is made up of:
+ *   (1) A function f : R^3 -> R, which is defined as (x,y,z) |-> a, i.e. a = f(x,y,z)
+ *   (2) A color
+ *
+ *   Remark: f is a function pointer taking 3 ints (x,y,z) and returning an int (a)
+ *   Remark: (2) is of type Color::Color as defined above
+ *
+ * Definition: The _Frame_Buffer_ is the viewport in a Linux TTY session. It is the two
+ *  dimensional screen that we can draw on.
+ *
+ * Remark: One can think about the Frame Buffer as a section of an R^2 space that all
+ *  `GeometricGameObject`s must eventually mapped to if they are to be seen by the player.
+ *
+ * Definition: The _Camera_ is the plane, whose type is a `GeometricGameObject`, 
+ *  representing our Frame Buffer in the Game World.
+ *
+ * Remark: In order to view a `GeometricGameObject`, we must project the object onto the 
+ *  Camera.
+ *
+ */
+// }}}
+
+
+namespace Color {
+  struct Color {
+    int red;
+    int green;
+    int blue;
+  
+  };
+  
+  static constexpr Color RED{255, 0, 0};
+  static constexpr Color GREEN{0, 255, 0};
+  static constexpr Color BLUE{0, 0, 255};
 };
 
-class Framebuffer {
-//private:
-public:
-  int width;
-  int height;
+
+struct GeometricGameObject {
+  int(*fn)(int, int, int);
+  Color::Color color;
+};
+
+class Framebuffer { 
+// {{{
+ private:
   int bpp;
   int bytes;
-
   int fb_memory_size;
-
   char *fb_memory;
 
-public:
+ public:
+  int width;
+  int height;
+
   Framebuffer() {
     // fbfd = frame buffer file descriptor
     int fbfd = open("/dev/fb0", O_RDWR);
@@ -65,36 +110,31 @@ public:
     //close(fbfd);
   }
 
-  struct Color {
-    int red;
-    int green;
-    int blue;
-  };
-
-  static constexpr Color RED{255, 0, 0};
-  static constexpr Color GREEN{0, 255, 0};
-  static constexpr Color BLUE{0, 0, 255};
-
-  struct Pixel {
-    int x;
-    int y;
-    Color color;
-  };
-
-  void write(Pixel& p) {
-    int offset = (p.y * width + p.x) * 4;
-    fb_memory[offset + 0] = p.color.blue;
-    fb_memory[offset + 1] = p.color.green;
-    fb_memory[offset + 2] = p.color.red;
+  void write(int x, int y, Color::Color c) {
+    int offset = (y * width + x) * 4;
+    fb_memory[offset + 0] = c.blue;
+    fb_memory[offset + 1] = c.green;
+    fb_memory[offset + 2] = c.red;
     fb_memory[offset + 3] = 0; // Remark: This may not be needed.
   }
 
   ~Framebuffer() {
     munmap(fb_memory, fb_memory_size);
   }
+// }}}
+}; 
 
-};
+class Camera : public FrameBuffer, public GeoemtricGameObject {
 
+}
+
+
+// ========== Global Objects ==========
+std::vector<GeometricGameObject> game_objects;
+Framebuffer fb;
+
+
+// ========== Global Functions ==========
 int square_fn(int x, int y, int z) {
   return (x >= 0 && x < 500) &&
          (y >=0 && y < 500) ? 
@@ -110,92 +150,39 @@ int circle_fn(int x, int y, int z) {
   return std::sqrt(translated_x_squared + translated_y_squared) - radius;
 }
 
+void draw_screen(int x, int y) {
+  for (GeometricGameObject obj : game_objects) {
+    // res = f(x, y, z)
+    int res = obj.fn(x, y, 0);
+    //std::cout << "obj.fn(x, y, 0) = " << res << std::endl;
+    if (res == 0) {
 
-std::vector<GeometricGameObject> game_objects;
+      fb.write(x, y, obj.color);
+    }
+  }
+}
 
+
+// ========== Main Loop ==========
 int main() {
   // Create game objects
-  GeometricGameObject x;
-  x.fn = &square_fn;
-  game_objects.push_back(x);
+  GeometricGameObject square;
+  square.fn = &square_fn;
+  square.color = Color::RED;
+  game_objects.push_back(square);
 
-  GeometricGameObject y;
-  y.fn = &circle_fn;
-  game_objects.push_back(y);
-
-  // Set up Framebuffer
-  Framebuffer fb;
-  //int x, y;
-  Framebuffer::Pixel p;
-  p.color = Framebuffer::RED;
-  unsigned long long t = 0;
+  GeometricGameObject circle;
+  circle.fn = &circle_fn;
+  circle.color = Color::GREEN;
+  game_objects.push_back(circle);
 
   // Start Game Loop
   while (true) {
     for (int x = 0; x < fb.width; ++x) {
       for (int y = 0; y < fb.height; ++y) {
-        for (GeometricGameObject obj : game_objects) {
-          int res = obj.fn(x, y, 0);
-          //std::cout << "obj.fn(x, y, 0) = " << res << std::endl;
-          if (res == 0) {
-            p.x = x;
-            p.y = y;
-            fb.write(p);
-          }
-        }
+        draw_screen(x, y);
       }
     }
-    //p.color = Framebuffer::RED;
-    //for (int i = 0; i < 500; ++i) {
-    //  for (int j = 0; j < 500; ++j) {
-    //    p.x = i;
-    //    p.y = j;
-    //    fb.write(p);
-    //  }
-    //}
-
-    //p.color = Framebuffer::GREEN;
-    //for (int i = 600; i < 1000; ++i) {
-    //  for (int j = 0; j < i - 600; ++j) {
-    //    p.x = i;
-    //    p.y = j;
-    //    fb.write(p);
-
-    //  }
-    //}
-
-    // Circle
-    // center (1200, 200)
-    // (x, y) = (r*cos(theta)+1200, r*sin(theta)+200)
-    ////int r = 200;
-    //for (int r = 200; r > 150; --r) {
-    //  for (int theta = 0; theta < 5000; ++theta) {
-    //    p.x = 1300 + r*std::cos(theta);
-    //    p.y = 200 + r*std::sin(theta);
-    //    fb.write(p);
-    //  }
-    //}
-
-
-    // another circle
-    // center (1500, 200)
-    //for (int i = 1500; i < 1900; ++i) {
-    //  for (int j = 0; j < 400; ++j) {
-    //    int adj_i = i - 1700;
-    //    int adj_j = j - 200;
-    //    int ii = adj_i*adj_i;
-    //    int jj = adj_j*adj_j;
-
-    //    bool is_within_circle = std::sqrt(ii + jj) < 200;
-    //    if (is_within_circle) {
-    //      p.x = i;
-    //      p.y = j;
-    //      fb.write(p);
-    //    }
-    //  }
-    //}
-
-    t += 1;
   }
 
   return 0;
